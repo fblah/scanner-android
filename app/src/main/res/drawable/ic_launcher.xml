@@ -1,0 +1,4 @@
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+<item><shape><solid android:color="#0D7566"/><corners android:radius="24dp"/></shape></item>
+<item android:drawable="@drawable/ic_scan"/>
+</layer-list>
