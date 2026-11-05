@@ -1,6 +1,11 @@
 package com.fblah.scan
 
 import android.os.Bundle
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
@@ -46,6 +51,27 @@ private fun ScanTheme(content: @Composable () -> Unit) {
 private fun Library() {
     val colors = MaterialTheme.colorScheme
     val context = LocalContext.current
+    val store = remember { DocumentStore(context) }
+    var documents by remember { mutableStateOf(emptyList<DocumentStore.Document>()) }
+    var importMessage by remember { mutableStateOf("") }
+    var importing by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { documents = withContext(Dispatchers.IO) { store.load() } }
+    val importScope = rememberCoroutineScope()
+    val importImages = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        if (uris.isNotEmpty()) importScope.launch {
+            importing = true
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    val doc = store.import(uris)
+                    val next = listOf(doc) + store.load()
+                    store.save(next)
+                    next
+                }
+            }.onSuccess { documents = it; importMessage = "Images saved on this device." }
+                .onFailure { importMessage = "Import failed: ${it.localizedMessage}" }
+            importing = false
+        }
+    }
     val updater = remember { AppUpdater(context) }
     val scope = rememberCoroutineScope()
     var update by remember { mutableStateOf<AppUpdater.Update?>(null) }
@@ -86,7 +112,18 @@ private fun Library() {
                 Text("Your library", style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Bold)
                 Text("Make room for what matters.", color = colors.onSurfaceVariant)
             }
-            Surface(shape = RoundedCornerShape(28.dp), color = colors.surface) {
+            Button(onClick = { importImages.launch(arrayOf("image/*")) }, enabled = !importing,
+                modifier = Modifier.fillMaxWidth()) { Text(if (importing) "Importing…" else "Import images") }
+            if (importMessage.isNotEmpty()) Text(importMessage)
+            documents.forEach { doc ->
+                Surface(shape = RoundedCornerShape(20.dp), color = colors.surface) {
+                    Column(Modifier.fillMaxWidth().padding(20.dp)) {
+                        Text(doc.name, style = MaterialTheme.typography.titleMedium)
+                        Text("${doc.pages.size} pages · Saved on device", color = colors.onSurfaceVariant)
+                    }
+                }
+            }
+            if (documents.isEmpty()) Surface(shape = RoundedCornerShape(28.dp), color = colors.surface) {
                 Column(Modifier.fillMaxWidth().padding(28.dp), horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(16.dp)) {
                     Box(Modifier.size(120.dp).background(colors.surfaceVariant, RoundedCornerShape(36.dp)),
