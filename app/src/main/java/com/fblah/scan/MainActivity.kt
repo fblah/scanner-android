@@ -10,7 +10,11 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
+import androidx.compose.ui.platform.LocalContext
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -41,6 +45,30 @@ private fun ScanTheme(content: @Composable () -> Unit) {
 @Composable
 private fun Library() {
     val colors = MaterialTheme.colorScheme
+    val context = LocalContext.current
+    val updater = remember { AppUpdater(context) }
+    val scope = rememberCoroutineScope()
+    var update by remember { mutableStateOf<AppUpdater.Update?>(null) }
+    var updateMessage by remember { mutableStateOf("Checking for updates…") }
+    LaunchedEffect(Unit) {
+        update = withContext(Dispatchers.IO) { runCatching { updater.check() }.getOrNull() }
+        updateMessage = if (update == null) "No update available, or GitHub could not be reached." else "A new build is ready."
+    }
+    var dismissed by remember { mutableStateOf(false) }
+    if (update != null && !dismissed) {
+        AlertDialog(onDismissRequest = { dismissed = true },
+            title = { Text("Update Scan") },
+            text = { Text("A newer version is available. Download it now? Android will ask you to confirm installation.") },
+            confirmButton = { TextButton(onClick = {
+                dismissed = true
+                scope.launch {
+                    runCatching { withContext(Dispatchers.IO) { updater.download(update!!) } }
+                        .onSuccess { updateMessage = "Downloading. Use App updates when finished to install."; update = null }
+                        .onFailure { updateMessage = "Download failed. Please try again." }
+                }
+            }) { Text("Download") } },
+            dismissButton = { TextButton(onClick = { dismissed = true }) { Text("Later") } })
+    }
     Surface(Modifier.fillMaxSize(), color = colors.background) {
         Column(Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState())
             .padding(horizontal = 24.dp, vertical = 28.dp), verticalArrangement = Arrangement.spacedBy(24.dp)) {
@@ -78,6 +106,23 @@ private fun Library() {
                     Text("Document processing and storage stay on your phone.", style = MaterialTheme.typography.bodyMedium)
                 }
             }
+            OutlinedButton(onClick = {
+                scope.launch {
+                    runCatching {
+                        if (updater.installDownloaded()) return@runCatching
+                        val available = update
+                        if (available != null) {
+                            withContext(Dispatchers.IO) { updater.download(available) }
+                            updateMessage = "Downloading. Tap again when the download finishes to install."
+                            update = null
+                        } else {
+                            update = withContext(Dispatchers.IO) { updater.check() }
+                            updateMessage = if (update == null) "No update available." else "Update available. Tap to download."
+                        }
+                    }.onFailure { updateMessage = "Update unavailable. Please try again." }
+                }
+            }, modifier = Modifier.fillMaxWidth()) { Text("App updates") }
+            Text(updateMessage, style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)
             Text("EARLY PREVIEW", style = MaterialTheme.typography.labelMedium, color = colors.primary)
             Text("Scanning and importing are being built. Your library will appear here when they’re ready.",
                 style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant)

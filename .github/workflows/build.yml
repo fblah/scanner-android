@@ -53,10 +53,10 @@ jobs:
             git tag --force latest "$GITHUB_SHA"
             git push origin refs/tags/latest --force
             if gh release view latest >/dev/null 2>&1; then
-              gh release edit latest --title 'Scan (latest development build)' --notes "Development build $GITHUB_RUN_NUMBER from $GITHUB_SHA. Feature parity is in progress." --prerelease
+              gh release edit latest --title 'Scan (latest development build)' --notes "Development build $GITHUB_RUN_NUMBER from $GITHUB_SHA. Feature parity is in progress. build=$GITHUB_RUN_NUMBER" --prerelease
               gh release upload latest scan.apk --clobber
             else
-              gh release create latest scan.apk --title 'Scan (latest development build)' --notes 'Feature parity is in progress.' --prerelease
+              gh release create latest scan.apk --title 'Scan (latest development build)' --notes "Feature parity is in progress. build=$GITHUB_RUN_NUMBER" --prerelease
             fi
           fi
       - name: Remove signing material

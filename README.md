@@ -27,3 +27,7 @@ Remaining parity work:
 Actions builds every pushed branch and uploads a signed APK artifact. Main publishes a rolling `latest` prerelease; pushing a tag such as `v0.1.0` publishes a permanent versioned release. CI run numbers supply increasing Android version codes. Only main and version tags publish releases.
 
 All release APKs use the same dedicated Scan signing key from repository secrets KEYSTORE_BASE64, KEYSTORE_PASSWORD, KEY_ALIAS and KEY_PASSWORD. Missing keys fail the build. Local key and credentials backup: ~/.config/scan-android-signing/ (keep a secure backup of this directory; never commit it). This is a self-generated Android signing certificate; no developer account is required for APK distribution.
+
+## In-app updates
+
+The app checks the GitHub `latest` prerelease on launch, compares its `build=N` metadata to the installed version code and offers a download. Use **App updates** after download to launch Android's installer. Android may require enabling “Allow from this source” for Scan; then tap App updates again. Installation requires user confirmation and preserves data when upgrading APKs signed by the persistent release key. Debug APKs use a different development certificate and cannot upgrade release installations. Device validation of the download/permission/installer flow remains required.
