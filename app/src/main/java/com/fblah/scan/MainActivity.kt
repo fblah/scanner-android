@@ -1,168 +1,175 @@
 package com.fblah.scan
 
 import android.os.Bundle
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.Image
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.layout.ContentScale
+import android.content.Intent
+import android.net.Uri
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.background
-import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.platform.LocalContext
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import kotlinx.coroutines.launch
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.unit.dp
+import androidx.core.content.FileProvider
+import kotlinx.coroutines.*
+import java.io.File
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { ScanTheme { Library() } }
+        val incoming = when(intent.action) {
+            Intent.ACTION_SEND -> listOfNotNull(intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM))
+            Intent.ACTION_SEND_MULTIPLE -> intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)?.toList() ?: emptyList()
+            else -> emptyList()
+        }
+        setContent { MaterialTheme(colorScheme = if (isSystemInDarkTheme()) darkColorScheme(primary=Color(0xFF83D5C2)) else lightColorScheme(primary=Color(0xFF0D7566))) { ScanApp(incoming) } }
     }
 }
 
 @Composable
-private fun ScanTheme(content: @Composable () -> Unit) {
-    val colors = if (isSystemInDarkTheme()) darkColorScheme(
-        primary = Color(0xFF83D5C2), background = Color(0xFF101916),
-        surface = Color(0xFF17231F), surfaceVariant = Color(0xFF253A32)
-    ) else lightColorScheme(
-        primary = Color(0xFF0D7566), background = Color(0xFFF6F8F4),
-        surface = Color(0xFFFFFFFF), surfaceVariant = Color(0xFFE4EEE7),
-        onBackground = Color(0xFF182C25), onSurface = Color(0xFF182C25)
-    )
-    MaterialTheme(colorScheme = colors, content = content)
-}
-
-@Composable
-private fun Library() {
-    val colors = MaterialTheme.colorScheme
-    val context = LocalContext.current
+private fun ScanApp(incoming: List<Uri>) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val analytics = remember { Analytics(context) }
+    var analyticsEnabled by remember { mutableStateOf(analytics.enabled) }
     val store = remember { DocumentStore(context) }
-    var documents by remember { mutableStateOf(emptyList<DocumentStore.Document>()) }
-    var importMessage by remember { mutableStateOf("") }
-    var importing by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) { documents = withContext(Dispatchers.IO) { store.load() } }
-    val importScope = rememberCoroutineScope()
-    val importImages = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
-        if (uris.isNotEmpty()) importScope.launch {
-            importing = true
-            runCatching {
-                withContext(Dispatchers.IO) {
-                    val doc = store.import(uris)
-                    val next = listOf(doc) + store.load()
-                    store.save(next)
-                    next
-                }
-            }.onSuccess { documents = it; importMessage = "Images saved on this device." }
-                .onFailure { importMessage = "Import failed: ${it.localizedMessage}" }
-            importing = false
-        }
-    }
-    val updater = remember { AppUpdater(context) }
     val scope = rememberCoroutineScope()
-    var update by remember { mutableStateOf<AppUpdater.Update?>(null) }
-    var updateMessage by remember { mutableStateOf("Checking for updates…") }
-    LaunchedEffect(Unit) {
-        update = withContext(Dispatchers.IO) { runCatching { updater.check() }.getOrNull() }
-        updateMessage = if (update == null) "No update available, or GitHub could not be reached." else "A new build is ready."
+    var docs by remember { mutableStateOf(emptyList<DocumentStore.Document>()) }
+    var active by remember { mutableStateOf<String?>(null) }
+    var selected by remember { mutableStateOf(setOf<String>()) }
+    var selectedDocs by remember { mutableStateOf(setOf<String>()) }
+    var query by remember { mutableStateOf("") }
+    var message by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    var crop by remember { mutableStateOf<String?>(null) }
+    var rename by remember { mutableStateOf(false) }
+    var name by remember { mutableStateOf("") }
+    var saveRequested by remember { mutableStateOf(false) }
+    var saveFile by remember { mutableStateOf<File?>(null) }
+    val savePicker = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
+        val file=saveFile
+        if(uri!=null && file!=null) scope.launch {runCatching {withContext(Dispatchers.IO){context.contentResolver.openOutputStream(uri)?.use { output -> file.inputStream().use {it.copyTo(output)} }}}.onFailure{message="Save failed"} }
     }
-    var dismissed by remember { mutableStateOf(false) }
-    if (update != null && !dismissed) {
-        AlertDialog(onDismissRequest = { dismissed = true },
-            title = { Text("Update Scan") },
-            text = { Text("A newer version is available. Download it now? Android will ask you to confirm installation.") },
-            confirmButton = { TextButton(onClick = {
-                dismissed = true
-                scope.launch {
-                    runCatching { withContext(Dispatchers.IO) { updater.download(update!!) } }
-                        .onSuccess { updateMessage = "Downloading. Use App updates when finished to install."; update = null }
-                        .onFailure { updateMessage = "Download failed. Please try again." }
-                }
-            }) { Text("Download") } },
-            dismissButton = { TextButton(onClick = { dismissed = true }) { Text("Later") } })
-    }
-    Surface(Modifier.fillMaxSize(), color = colors.background) {
-        Column(Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState())
-            .padding(horizontal = 24.dp, vertical = 28.dp), verticalArrangement = Arrangement.spacedBy(24.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Surface(shape = RoundedCornerShape(16.dp), color = Color(0xFF0D7566)) {
-                    Icon(painterResource(R.drawable.ic_scan), contentDescription = null,
-                        modifier = Modifier.size(52.dp), tint = Color.Unspecified)
-                }
-                Column {
-                    Text("Scan", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-                    Text("A little less paper.", style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant)
-                }
-            }
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Your library", style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Bold)
-                Text("Make room for what matters.", color = colors.onSurfaceVariant)
-            }
-            Button(onClick = { importImages.launch(arrayOf("image/*")) }, enabled = !importing,
-                modifier = Modifier.fillMaxWidth()) { Text(if (importing) "Importing…" else "Import images") }
-            if (importMessage.isNotEmpty()) Text(importMessage)
-            documents.forEach { doc ->
-                Surface(shape = RoundedCornerShape(20.dp), color = colors.surface) {
-                    Column(Modifier.fillMaxWidth().padding(20.dp)) {
-                        Text(doc.name, style = MaterialTheme.typography.titleMedium)
-                        Text("${doc.pages.size} pages · Saved on device", color = colors.onSurfaceVariant)
-                    }
-                }
-            }
-            if (documents.isEmpty()) Surface(shape = RoundedCornerShape(28.dp), color = colors.surface) {
-                Column(Modifier.fillMaxWidth().padding(28.dp), horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                    Box(Modifier.size(120.dp).background(colors.surfaceVariant, RoundedCornerShape(36.dp)),
-                        contentAlignment = Alignment.Center) {
-                        Icon(painterResource(R.drawable.ic_scan), contentDescription = null,
-                            modifier = Modifier.size(104.dp), tint = colors.primary)
-                    }
-                    Text("A fresh start", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-                    Text("Receipts, notes, and important pages.\nSoon, all together in one quiet place.",
-                        style = MaterialTheme.typography.bodyLarge, color = colors.onSurfaceVariant,
-                        textAlign = androidx.compose.ui.text.style.TextAlign.Center)
-                }
-            }
-            Surface(shape = RoundedCornerShape(20.dp), color = colors.surfaceVariant) {
-                Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("Built for your device", fontWeight = FontWeight.SemiBold)
-                    Text("Document processing and storage stay on your phone.", style = MaterialTheme.typography.bodyMedium)
-                }
-            }
-            OutlinedButton(onClick = {
-                scope.launch {
-                    runCatching {
-                        if (updater.installDownloaded()) return@runCatching
-                        val available = update
-                        if (available != null) {
-                            withContext(Dispatchers.IO) { updater.download(available) }
-                            updateMessage = "Downloading. Tap again when the download finishes to install."
-                            update = null
-                        } else {
-                            update = withContext(Dispatchers.IO) { updater.check() }
-                            updateMessage = if (update == null) "No update available." else "Update available. Tap to download."
-                        }
-                    }.onFailure { updateMessage = "Update unavailable. Please try again." }
-                }
-            }, modifier = Modifier.fillMaxWidth()) { Text("App updates") }
-            Text(updateMessage, style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)
-            Text("EARLY PREVIEW", style = MaterialTheme.typography.labelMedium, color = colors.primary)
-            Text("Scanning and importing are being built. Your library will appear here when they’re ready.",
-                style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant)
+    var format by remember { mutableStateOf("Auto") }
+    var cameraUri by remember { mutableStateOf<Uri?>(null) }
+    val doc = docs.find { it.id == active }
+    fun persist(next: List<DocumentStore.Document>) { store.save(next); docs = next; analytics.track("library_changed",next.size) }
+    fun add(uris: List<Uri>) {
+        if (uris.isEmpty()) return
+        val target = active
+        scope.launch {
+            busy = true
+            runCatching { withContext(Dispatchers.IO) { store.import(uris) } }.onSuccess { imported ->
+                val existing = docs.find { it.id == target }
+                persist(if(existing == null) listOf(imported)+docs else docs.map { if(it.id==target) it.copy(pages=it.pages+imported.pages) else it })
+                analytics.track("pages_added",imported.pages.size)
+                active = existing?.id ?: imported.id
+            }.onFailure { message = "Import failed: ${it.localizedMessage}" }
+            busy = false
         }
     }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { add(it) }
+    val camera = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok -> if(ok) cameraUri?.let { add(listOf(it)) } }
+    fun capture() { val file=File.createTempFile("capture", ".jpg",context.cacheDir); cameraUri=FileProvider.getUriForFile(context,"${context.packageName}.files",file); camera.launch(cameraUri!!) }
+    LaunchedEffect(Unit) { docs=withContext(Dispatchers.IO){store.load()}; analytics.track("pageview"); add(incoming) }
+    BackHandler(active!=null) { active=null; selected=emptySet() }
+    fun clonePage(path:String):String {
+        val out=File(File(path).parentFile,"${java.util.UUID.randomUUID()}.jpg")
+        File(path).copyTo(out)
+        File(out.path+".source").writeText(Scanner.source(path))
+        return out.path
+    }
+    fun paths() = doc?.pages?.filter { selected.isEmpty() || it in selected } ?: emptyList()
+    fun share(files: List<File>, mime: String) {
+        val uris=ArrayList(files.map { FileProvider.getUriForFile(context,"${context.packageName}.files",it) })
+        context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND_MULTIPLE).setType(mime).putParcelableArrayListExtra(Intent.EXTRA_STREAM,uris).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION),"Share scans"))
+    }
+    fun export(pdf: Boolean) {
+        val pages=paths(); if(pages.isEmpty())return
+        scope.launch { busy=true; runCatching { withContext(Dispatchers.IO) {
+            if(!pdf) pages.mapIndexed { i,p -> File(context.cacheDir,"scan-${System.nanoTime()}-$i.jpg").also { out -> val b=Images.decode(p); out.outputStream().use { b.compress(android.graphics.Bitmap.CompressFormat.JPEG,90,it) };b.recycle() } }
+            else {
+                val out=File(context.cacheDir,"scan-${System.nanoTime()}.pdf")
+                val document=android.graphics.pdf.PdfDocument()
+                try { pages.forEachIndexed { i,p ->
+                    val b=Images.decode(p)
+                    val w=if(format=="Auto") b.width else if(format=="A4")595 else 612
+                    val h=if(format=="Auto") b.height else if(format=="A4")842 else 792
+                    val page=document.startPage(android.graphics.pdf.PdfDocument.PageInfo.Builder(w,h,i+1).create())
+                    val scale=minOf(w.toFloat()/b.width,h.toFloat()/b.height)
+                    val dw=b.width*scale;val dh=b.height*scale
+                    page.canvas.drawColor(android.graphics.Color.WHITE)
+                    page.canvas.drawBitmap(b,null,android.graphics.RectF((w-dw)/2,(h-dh)/2,(w+dw)/2,(h+dh)/2),null)
+                    document.finishPage(page);b.recycle()
+                };out.outputStream().use { document.writeTo(it) } } finally { document.close() };listOf(out)
+            }
+        } }.onSuccess { analytics.track("export",pages.size); if(saveRequested && pdf){saveFile=it.first();savePicker.launch("scan.pdf");saveRequested=false}else share(it,if(pdf)"application/pdf" else "image/jpeg") }.onFailure { message="Export failed: ${it.localizedMessage}" };busy=false }
+    }
+    crop?.let { original -> CropEditor(Scanner.source(original), done={ result ->
+        persist(docs.map { if(it.id==active)it.copy(pages=it.pages.map { p->if(p==original)result else p })else it });crop=null
+    },cancel={crop=null}) }
+    if(rename) AlertDialog(onDismissRequest={rename=false},title={Text("Document name")},text={TextField(name,{name=it})},confirmButton={TextButton(onClick={ if(name.isNotBlank())persist(docs.map { if(it.id==active)it.copy(name=name.trim())else it });rename=false }){Text("Save")}})
+    Surface(Modifier.fillMaxSize()) {
+        Column(Modifier.safeDrawingPadding().padding(20.dp).verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(12.dp)) {
+            Text(doc?.name ?: "Scan",style=MaterialTheme.typography.headlineLarge)
+            if(active!=null) TextButton(onClick={active=null;selected=emptySet()}){Text("← Library")}
+            if(busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+            if(message.isNotEmpty()) Text(message)
+            Row { Button(onClick={capture()},enabled=!busy){Text("Camera")};Spacer(Modifier.width(8.dp));OutlinedButton(onClick={picker.launch(arrayOf("image/*"))},enabled=!busy){Text("Import")}}
+            if(doc==null) {
+                OutlinedTextField(query,{query=it},label={Text("Search documents")},modifier=Modifier.fillMaxWidth())
+                docs.filter { it.name.contains(query,true) }.forEach { d ->
+                    Card(Modifier.fillMaxWidth().clickable { active=d.id;selected=emptySet() }) { Row(Modifier.padding(16.dp)) { Checkbox(d.id in selectedDocs,{selectedDocs=if(it)selectedDocs+d.id else selectedDocs-d.id});Column { Text(d.name);Text("${d.pages.size} pages") } } }
+                }
+                if(selectedDocs.isNotEmpty()) {
+                    Button(onClick={val chosen=docs.filter { it.id in selectedDocs };val first=chosen.first();persist(listOf(first.copy(pages=chosen.flatMap { it.pages }))+docs.filter { it.id !in selectedDocs });selectedDocs=emptySet()}){Text("Merge selected")}
+                    TextButton(onClick={persist(docs.filter { it.id !in selectedDocs });selectedDocs=emptySet()}){Text("Delete selected documents")}
+                }
+                if(docs.isEmpty()) Text("Your library is ready. Capture a page or import images to begin.")
+            } else {
+                Row { TextButton(onClick={name=doc.name;rename=true}){Text("Rename")};TextButton(onClick={persist(listOf(doc.copy(id=java.util.UUID.randomUUID().toString(),name=doc.name+" copy",pages=doc.pages.map {clonePage(it)}))+docs)}){Text("Duplicate")};TextButton(onClick={persist(docs.filter { it.id!=doc.id });active=null}){Text("Delete")}}
+                doc.pages.forEachIndexed { i,p ->
+                    Card(Modifier.fillMaxWidth()) { Column(Modifier.padding(12.dp)) {
+                        Row { Checkbox(p in selected,{ selected=if(it)selected+p else selected-p });Text("Page ${i+1}") }
+                        var bitmap by remember(p) { mutableStateOf<android.graphics.Bitmap?>(null) }
+                        LaunchedEffect(p) { bitmap=withContext(Dispatchers.IO){Images.decode(p)} }
+                        bitmap?.let { Image(it.asImageBitmap(),"Page ${i+1}",Modifier.fillMaxWidth().height(220.dp)) }
+                        Row { TextButton(onClick={if(i>0){val list=doc.pages.toMutableList();java.util.Collections.swap(list,i,i-1);persist(docs.map { if(it.id==active)it.copy(pages=list)else it })}}){Text("Move up")};TextButton(onClick={persist(docs.map { if(it.id==active)it.copy(pages=it.pages.toMutableList().apply { add(i,clonePage(p)) })else it })}){Text("Duplicate")}}
+                        TextButton(onClick={crop=p}){Text("Crop / deskew")}
+                        Row(Modifier.horizontalScroll(rememberScrollState())) { listOf("Original","Magic","Grayscale","B&W","Rotate").forEach { filter -> TextButton(onClick={scope.launch {busy=true;runCatching { withContext(Dispatchers.IO){if(filter=="Original")Scanner.source(p) else if(filter=="Rotate")Images.render(p,"Original",90) else {val b=Images.decode(p);try {Scanner.process(p,listOf(org.opencv.core.Point(0.0,0.0),org.opencv.core.Point(b.width-1.0,0.0),org.opencv.core.Point(b.width-1.0,b.height-1.0),org.opencv.core.Point(0.0,b.height-1.0)),filter)}finally{b.recycle()}}} }.onSuccess { rendered -> persist(docs.map { if(it.id==active)it.copy(pages=it.pages.mapIndexed { j,old -> if(j==i)rendered else old })else it }) }.onFailure {message="Edit failed"};busy=false }}){Text(filter,style=MaterialTheme.typography.labelSmall)} } }
+                    } }
+                }
+                if(selected.isNotEmpty()) {
+                    TextButton(onClick={val chosen=paths();val newDoc=DocumentStore.Document(java.util.UUID.randomUUID().toString(),"New document",chosen);persist(listOf(newDoc)+docs.map {if(it.id==active)it.copy(pages=it.pages.filter {p->p !in selected})else it});selected=emptySet()}){Text("Move to new document")}
+                    TextButton(onClick={val newDoc=DocumentStore.Document(java.util.UUID.randomUUID().toString(),"Copied pages",paths().map{clonePage(it)});persist(listOf(newDoc)+docs);selected=emptySet()}){Text("Copy to new document")}
+
+                    TextButton(onClick={persist(docs.map { if(it.id==active)it.copy(pages=it.pages.filter { p->p !in selected })else it });selected=emptySet()}){Text("Delete selected pages")}
+                    docs.filter {it.id!=active}.forEach { target ->
+                        Row { listOf(false,true).forEach { move -> TextButton(onClick={val chosen=paths();persist(docs.map { when(it.id){target.id->it.copy(pages=it.pages+if(move)chosen else chosen.map {p->clonePage(p)});active->if(move)it.copy(pages=it.pages.filter {p->p !in selected})else it;else->it} });selected=emptySet()}){Text("${if(move)"Move" else "Copy"} to ${target.name}")} } }
+                    }
+                }
+                Row { listOf("Auto","A4","Letter").forEach { option -> FilterChip(format==option,{format=option},label={Text(option)}) } }
+                Row { Button(onClick={export(true)},enabled=!busy){Text("Share PDF")};TextButton(onClick={export(false)},enabled=!busy){Text("Share JPG")};TextButton(onClick={saveRequested=true;export(true)},enabled=!busy){Text("Save PDF")}}
+            }
+            Text("Documents stay on your device.",style=MaterialTheme.typography.bodySmall)
+            Row { Checkbox(analyticsEnabled,{analyticsEnabled=it;analytics.enabled=it});Text("Anonymous usage analytics") }
+            UpdateControl()
+        }
+    }
+}
+
+@Composable
+private fun UpdateControl() {
+    val context=androidx.compose.ui.platform.LocalContext.current
+    val updater=remember {AppUpdater(context)}
+    val scope=rememberCoroutineScope()
+    var update by remember {mutableStateOf<AppUpdater.Update?>(null)}
+    var status by remember {mutableStateOf("")}
+    LaunchedEffect(Unit){update=withContext(Dispatchers.IO){runCatching{updater.check()}.getOrNull()};if(update!=null)status="Update available"}
+    TextButton(onClick={scope.launch {runCatching { if(!updater.installDownloaded()) {val available=update ?: withContext(Dispatchers.IO){updater.check()};if(available!=null){withContext(Dispatchers.IO){updater.download(available)};status="Downloading. Tap again when complete to install."}else status="No update available"} }.onFailure{status="Update failed; try again"}}}){Text(if(status.isEmpty())"App updates" else status)}
 }

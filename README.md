@@ -9,18 +9,11 @@ Set sdk.dir in local.properties to your SDK installation, then run ./gradlew ass
 
 ## Implementation status
 
-The initial project scaffold contains a placeholder Compose screen. Feature parity is not implemented yet.
+Implemented native flows: camera capture using the system camera, multi-image import and share-in, atomic document index persistence, search, rename, document duplication/merge/deletion, page selection/duplication/move/copy/deletion and move-up ordering. Imports perform OpenCV edge detection and perspective correction; the corner editor supports manual adjustment. Original images are retained for re-cropping. Filters include Original, Magic illumination correction, grayscale and adaptive B&W, with rotation. PDF Auto/A4/Letter and JPG sharing and PDF saving are available. Anonymous telemetry has an opt-out. GitHub update checks and APK installation are available.
 
-Remaining parity work:
-- Camera capture and multi-image import, including Android share-in
-- OpenCV edge detection, perspective correction, corner editor and magnifier
-- Original, Magic, grayscale and black-and-white filters; rotation and re-crop
-- Persistent document/page storage retaining original images
-- Search, rename, duplicate, merge and bulk deletion
-- Page reorder, move, copy and duplication
-- PDF Auto/A4/Letter and JPG export, save and Android share sheet
-- Anonymous analytics using the existing endpoint and event vocabulary, with opt-out; never send document names, identifiers or image content
-- Device validation of capture, offline editing, export and persistence
+Known parity gaps: long-press drag reordering, crop magnifier, explicit continuous scan review/retake flow, direct JPG saving, exact analytics event/property parity and offline telemetry retry. Corner detection currently uses edge contours rather than all three PWA strategies. Filters can accumulate on the current rendered image; Original restores the source. Files from deleted documents are currently retained in private storage. UI still needs a refinement pass.
+
+Validation: assembleDebug and lintDebug pass. No Android device is attached, so camera, share-in, OpenCV runtime, persistence after process death, installer updates and exported file rendering still require device/emulator verification. This is development software, not a fully verified feature-parity release.
 
 ## Releases and signing
 

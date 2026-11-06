@@ -24,7 +24,7 @@ class AppUpdater(private val context: Context) {
             if (connection.responseCode != 200) return null
             val release = JSONObject(connection.inputStream.bufferedReader().use { it.readText() })
             val code = Regex("build=(\\d+)").find(release.optString("body"))?.groupValues?.get(1)?.toLongOrNull() ?: return null
-            val installed = context.packageManager.getPackageInfo(context.packageName, 0).longVersionCode
+            val installed = androidx.core.content.pm.PackageInfoCompat.getLongVersionCode(context.packageManager.getPackageInfo(context.packageName, 0))
             if (code <= installed) return null
             val assets = release.getJSONArray("assets")
             for (i in 0 until assets.length()) {

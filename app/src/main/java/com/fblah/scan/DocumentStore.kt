@@ -38,7 +38,8 @@ class DocumentStore(private val context: Context) {
                 val options = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
                 android.graphics.BitmapFactory.decodeFile(file.path, options)
                 require(options.outWidth > 0) { "Unsupported image" }
-                file.path
+                val bitmap = Images.decode(file.path)
+                try { Scanner.process(file.path, Scanner.detect(bitmap)) } finally { bitmap.recycle() }
             }
             return Document(id, "Scan ${java.text.SimpleDateFormat("dd MMM HH:mm", java.util.Locale.getDefault()).format(java.util.Date())}", pages)
         } catch (e: Exception) { folder.deleteRecursively(); throw e }
