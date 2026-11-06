@@ -9,6 +9,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
@@ -23,6 +25,7 @@ import kotlin.math.roundToInt
 fun CropEditor(path: String, done: (String) -> Unit, cancel: () -> Unit) {
     var bitmap by remember(path) { mutableStateOf<android.graphics.Bitmap?>(null) }
     var points by remember(path) { mutableStateOf(emptyList<Point>()) }
+    var dragging by remember(path) { mutableStateOf(-1) }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
@@ -60,7 +63,6 @@ fun CropEditor(path: String, done: (String) -> Unit, cancel: () -> Unit) {
                         val scale = minOf((size.width - inset * 2) / b.width, (size.height - inset * 2) / b.height)
                         val origin = Offset((size.width - b.width * scale) / 2, (size.height - b.height * scale) / 2)
                         val touchRadius = 40.dp.toPx()
-                        var dragging = -1
                         detectDragGestures(
                             onDragStart = { pos ->
                                 dragging = points.indices.minByOrNull { i ->
@@ -95,6 +97,34 @@ fun CropEditor(path: String, done: (String) -> Unit, cancel: () -> Unit) {
                             drawCircle(Color.Cyan.copy(alpha = 0.18f), 28.dp.toPx(), a)
                             drawCircle(Color.White, 10.dp.toPx(), a)
                             drawCircle(Color(0xFF0D7566), 6.dp.toPx(), a)
+                        }
+                        // Draw above the handles; the lens never intercepts touch input.
+                        if (dragging in points.indices && !busy) {
+                            val p = points[dragging]
+                            val handle = Offset(origin.x + p.x.toFloat() * scale, origin.y + p.y.toFloat() * scale)
+                            val margin = 12.dp.toPx()
+                            val side = minOf(144.dp.toPx(), size.width - margin * 2, size.height - margin * 2)
+                            if (side > 0f) {
+                                val left = if (handle.x < size.width / 2) size.width - side - margin else margin
+                                val top = if (handle.y < size.height / 2) size.height - side - margin else margin
+                                val center = Offset(left + side / 2, top + side / 2)
+                                val zoom = scale * 3f
+                                drawRect(Color.Black.copy(alpha = 0.6f), Offset(left - 3.dp.toPx(), top - 3.dp.toPx()),
+                                    androidx.compose.ui.geometry.Size(side + 6.dp.toPx(), side + 6.dp.toPx()))
+                                clipRect(left, top, left + side, top + side) {
+                                    drawRect(Color(0xFF253A32), Offset(left, top), androidx.compose.ui.geometry.Size(side, side))
+                                    drawImage(b.asImageBitmap(),
+                                        dstOffset = IntOffset((center.x - p.x * zoom).roundToInt(), (center.y - p.y * zoom).roundToInt()),
+                                        dstSize = IntSize((b.width * zoom).roundToInt().coerceAtLeast(1), (b.height * zoom).roundToInt().coerceAtLeast(1)))
+                                    // Crosshair marks the exact crop point even at an image boundary.
+                                    val arm = 12.dp.toPx()
+                                    drawLine(Color.Black, center - Offset(arm, 0f), center + Offset(arm, 0f), 3.dp.toPx())
+                                    drawLine(Color.Black, center - Offset(0f, arm), center + Offset(0f, arm), 3.dp.toPx())
+                                    drawLine(Color.Cyan, center - Offset(arm, 0f), center + Offset(arm, 0f), 1.dp.toPx())
+                                    drawLine(Color.Cyan, center - Offset(0f, arm), center + Offset(0f, arm), 1.dp.toPx())
+                                }
+                                drawRect(Color.White, Offset(left, top), androidx.compose.ui.geometry.Size(side, side), style = Stroke(2.dp.toPx()))
+                            }
                         }
                     }
                 } ?: Spacer(Modifier.weight(1f))
