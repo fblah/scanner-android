@@ -20,16 +20,39 @@ object Scanner {
             Imgproc.resize(src,small,Size(),scale,scale)
             Imgproc.cvtColor(small,gray,Imgproc.COLOR_RGBA2GRAY)
             Imgproc.GaussianBlur(gray,gray,Size(5.0,5.0),0.0)
-            Imgproc.Canny(gray,edges,30.0,110.0)
-            Imgproc.findContours(edges,contours,hierarchy,Imgproc.RETR_LIST,Imgproc.CHAIN_APPROX_SIMPLE)
-            var best: List<Point>?=null;var area=small.total()*0.08
-            contours.forEach { c ->
-                val curve=MatOfPoint2f(*c.toArray());val approx=MatOfPoint2f()
-                try { Imgproc.approxPolyDP(curve,approx,0.02*Imgproc.arcLength(curve,true),true)
-                    val polygon=MatOfPoint(*approx.toArray())
-                    try {val a=Imgproc.contourArea(polygon);if(approx.total()==4L && a>area && Imgproc.isContourConvex(polygon)){best=ordered(approx.toList()).map{Point(it.x/scale,it.y/scale)};area=a}}finally{polygon.release()}
-                }finally{curve.release();approx.release()}
-            }
+            var best: List<Point>?=null
+            var bestScore=0.0
+            val kernel=Imgproc.getStructuringElement(Imgproc.MORPH_RECT,Size(5.0,5.0))
+            val hsv=Mat();val rgbDetect=Mat();val saturation=Mat()
+            try {
+                // Complementary masks recover paper when shadows break an edge contour.
+                for(strategy in 0..2) {
+                    when(strategy) {
+                        0 -> {Imgproc.Canny(gray,edges,30.0,110.0);Imgproc.morphologyEx(edges,edges,Imgproc.MORPH_CLOSE,kernel)}
+                        1 -> {Imgproc.threshold(gray,edges,0.0,255.0,Imgproc.THRESH_BINARY+Imgproc.THRESH_OTSU);Imgproc.morphologyEx(edges,edges,Imgproc.MORPH_OPEN,kernel)}
+                        else -> {Imgproc.cvtColor(small,rgbDetect,Imgproc.COLOR_RGBA2RGB);Imgproc.cvtColor(rgbDetect,hsv,Imgproc.COLOR_RGB2HSV);Core.extractChannel(hsv,saturation,1);Imgproc.GaussianBlur(saturation,saturation,Size(5.0,5.0),0.0);Imgproc.threshold(saturation,edges,0.0,255.0,Imgproc.THRESH_BINARY_INV+Imgproc.THRESH_OTSU);Imgproc.morphologyEx(edges,edges,Imgproc.MORPH_OPEN,kernel)}
+                    }
+                    contours.forEach{it.release()};contours.clear()
+                    Imgproc.findContours(edges,contours,hierarchy,Imgproc.RETR_LIST,Imgproc.CHAIN_APPROX_SIMPLE)
+                    contours.forEach { c ->
+                        val curve=MatOfPoint2f(*c.toArray());val approx=MatOfPoint2f()
+                        try { for(epsilon in listOf(0.02,0.035,0.05)) {
+                            Imgproc.approxPolyDP(curve,approx,epsilon*Imgproc.arcLength(curve,true),true)
+                            if(approx.total()!=4L)continue
+                            val polygon=MatOfPoint(*approx.toArray())
+                            try {
+                                val area=Imgproc.contourArea(polygon)
+                                val pts=ordered(approx.toList())
+                                if(area>small.total()*0.08 && area<small.total()*0.97 && Imgproc.isContourConvex(polygon) && pts.distinctBy{it.x to it.y}.size==4) {
+                                    val border=pts.any{it.x<3 || it.y<3 || it.x>small.cols()-4 || it.y>small.rows()-4}
+                                    val score=area*(if(border)0.25 else 1.0)
+                                    if(score>bestScore){bestScore=score;best=pts.map{Point(it.x/scale,it.y/scale)}}
+                                }
+                            }finally{polygon.release()}
+                        } }finally{curve.release();approx.release()}
+                    }
+                }
+            }finally{listOf(kernel,hsv,rgbDetect,saturation).forEach{it.release()}}
             return best ?: listOf(Point(0.0,0.0),Point(bitmap.width.toDouble()-1,0.0),Point(bitmap.width.toDouble()-1,bitmap.height.toDouble()-1),Point(0.0,bitmap.height.toDouble()-1))
         }finally{contours.forEach{it.release()};listOf(src,small,gray,edges,hierarchy).forEach{it.release()}}
     }

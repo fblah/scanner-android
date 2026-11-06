@@ -56,6 +56,8 @@ private fun ScanApp(incoming: List<Uri>) {
         if(uri!=null && file!=null) scope.launch {runCatching {withContext(Dispatchers.IO){context.contentResolver.openOutputStream(uri)?.use { output -> file.inputStream().use {it.copyTo(output)} }}}.onFailure{message="Save failed"} }
     }
     var format by remember { mutableStateOf("Auto") }
+    var review by remember { mutableStateOf<DocumentStore.Document?>(null) }
+    var quality by remember { mutableStateOf("Standard") }
     var cameraUri by remember { mutableStateOf<Uri?>(null) }
     val doc = docs.find { it.id == active }
     fun persist(next: List<DocumentStore.Document>) { store.save(next); docs = next; analytics.track("library_changed",next.size) }
@@ -74,7 +76,14 @@ private fun ScanApp(incoming: List<Uri>) {
         }
     }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { add(it) }
-    val camera = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok -> if(ok) cameraUri?.let { add(listOf(it)) } }
+    val camera = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
+        if(ok) cameraUri?.let { uri -> scope.launch {
+            busy=true
+            runCatching { withContext(Dispatchers.IO){store.import(listOf(uri))} }
+                .onSuccess {review=it}.onFailure {message="Capture failed: ${it.localizedMessage}"}
+            busy=false
+        } }
+    }
     fun capture() { val file=File.createTempFile("capture", ".jpg",context.cacheDir); cameraUri=FileProvider.getUriForFile(context,"${context.packageName}.files",file); camera.launch(cameraUri!!) }
     LaunchedEffect(Unit) { docs=withContext(Dispatchers.IO){store.load()}; analytics.track("pageview"); add(incoming) }
     BackHandler(active!=null) { active=null; selected=emptySet() }
@@ -97,9 +106,15 @@ private fun ScanApp(incoming: List<Uri>) {
                 val out=File(context.cacheDir,"scan-${System.nanoTime()}.pdf")
                 val document=android.graphics.pdf.PdfDocument()
                 try { pages.forEachIndexed { i,p ->
-                    val b=Images.decode(p)
-                    val w=if(format=="Auto") b.width else if(format=="A4")595 else 612
-                    val h=if(format=="Auto") b.height else if(format=="A4")842 else 792
+                    val original=Images.decode(p)
+                    val limit=when(quality){"Compact"->1200;"Standard"->2000;else->3000}
+                    val ratio=minOf(1f,limit.toFloat()/maxOf(original.width,original.height))
+                    val b=if(ratio<1f)android.graphics.Bitmap.createScaledBitmap(original,(original.width*ratio).toInt().coerceAtLeast(1),(original.height*ratio).toInt().coerceAtLeast(1),true)else original
+                    val autoWidth=original.width
+                    val autoHeight=original.height
+                    if(b!==original)original.recycle()
+                    val w=if(format=="Auto") autoWidth else if(format=="A4")595 else 612
+                    val h=if(format=="Auto") autoHeight else if(format=="A4")842 else 792
                     val page=document.startPage(android.graphics.pdf.PdfDocument.PageInfo.Builder(w,h,i+1).create())
                     val scale=minOf(w.toFloat()/b.width,h.toFloat()/b.height)
                     val dw=b.width*scale;val dh=b.height*scale
@@ -110,6 +125,14 @@ private fun ScanApp(incoming: List<Uri>) {
             }
         } }.onSuccess { analytics.track("export",pages.size); if(saveRequested && pdf){saveFile=it.first();savePicker.launch("scan.pdf");saveRequested=false}else share(it,if(pdf)"application/pdf" else "image/jpeg") }.onFailure { message="Export failed: ${it.localizedMessage}" };busy=false }
     }
+    review?.let { pending -> ScanReview(pending.pages.first(),cancel={review=null},retake={review=null;capture()},accept={page,next ->
+        val existing=docs.find{it.id==active}
+        persist(if(existing==null)listOf(pending.copy(pages=listOf(page)))+docs else docs.map{if(it.id==active)it.copy(pages=it.pages+page)else it})
+        active=existing?.id ?: pending.id
+        analytics.track("pages_added")
+        review=null
+        if(next)capture()
+    }) }
     crop?.let { original -> CropEditor(Scanner.source(original), done={ result ->
         persist(docs.map { if(it.id==active)it.copy(pages=it.pages.map { p->if(p==original)result else p })else it });crop=null
     },cancel={crop=null}) }
@@ -154,6 +177,9 @@ private fun ScanApp(incoming: List<Uri>) {
                     }
                 }
                 Row { listOf("Auto","A4","Letter").forEach { option -> FilterChip(format==option,{format=option},label={Text(option)}) } }
+                Text("PDF quality")
+                Row { listOf("Compact","Standard","High").forEach { option -> FilterChip(quality==option,{quality=option},label={Text(option)}) } }
+                Text(when(quality){"Compact"->"Smaller files for messaging · 1200 px";"Standard"->"Balanced detail and file size · 2000 px";else->"Maximum available detail · up to 3000 px"},style=MaterialTheme.typography.bodySmall)
                 Row { Button(onClick={export(true)},enabled=!busy){Text("Share PDF")};TextButton(onClick={export(false)},enabled=!busy){Text("Share JPG")};TextButton(onClick={saveRequested=true;export(true)},enabled=!busy){Text("Save PDF")}}
             }
             Text("Documents stay on your device.",style=MaterialTheme.typography.bodySmall)
